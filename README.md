@@ -100,6 +100,81 @@ Once the model is trained, you can use it within the Evolutionary Algorithm (EA)
     ```
 This process will run the evolutionary optimization, generating mutant sequences, predicting their structures, and evaluating their fitness using the trained model. The results, including PDB structures of mutant sequences and corresponding fitness scores, will be saved in the pdb_files/ and OUTPUTS/ directories.
 
+## Pre-trained Models
+
+We release 1,290 trained TENet checkpoints covering every leave-one-domain-out fold of our training set, evaluated under four data-augmentation regimes. They can be downloaded as a single folder from Google Drive:
+
+**[TENet trained models (Google Drive)](https://drive.google.com/drive/folders/15TxVUp4dfInWMfeV1oRS03sp-SuzYiA1?usp=sharing)**
+
+### How the data was split
+
+The training set contains 54 domains. For each domain we performed leave-one-domain-out evaluation: a model was trained on the data from the remaining 53 domains and evaluated on the held-out 54th. Training was repeated 6 times per held-out domain (`replicate_0` through `replicate_5`) to give an estimate of replicate-to-replicate variability, yielding 324 models per setting (54 × 6).
+
+The four settings differ only in *what supervision from the held-out domain was added to training* — the train/test fold definitions are otherwise identical across settings:
+
+| # | Setting | Drive subfolder | What is added from the held-out domain |
+|---|---|---|---|
+| 1 | Zero-shot | `1_Zero_shot/` | Nothing — no reads from the held-out domain are added to training. |
+| 2 | One-shot (WT) | `2_One_shot_WT/` | The wild-type sequence of the held-out domain (identified using the ;WT; identifier in the label). |
+| 3 | Few-shot (windowed-shuffle, size 4) | `3_Few_shot_Windowed_4/` | Windowed-shuffle reads of size 4 from the held-out domain (identified using the WIND_4 identifier in the label). |
+| 4 | Few-shot (windowed-shuffle, sizes 4 and 8) | `4_Few_shot_Windowed_4_8/` | Windowed-shuffle reads of size 4 and size 8 from the held-out domain (identified using the WIND_4 and WIND_8 identifier in the label). |
+
+Setting 4 covers 53 of the 54 folds (the `Short_nuclear_domain;NGN2_HUMAN;HLH;99;52` fold is excluded because one of its six replicates is missing), giving **318 models** for that setting and **1,290 models in total** (324 + 324 + 324 + 318).
+
+### Folder layout
+
+```
+TENet_Trained_Models/
+├── 1_Zero_shot/
+│   └── <held-out-domain-name>/
+│       ├── replicate_0/model.pt
+│       ├── replicate_1/model.pt
+│       ├── ...
+│       └── replicate_5/model.pt
+├── 2_One_shot_WT/
+├── 3_Few_shot_Windowed_4/
+└── 4_Few_shot_Windowed_4_8/
+```
+
+The held-out-domain folder name encodes the full domain identifier, e.g. `Short_nuclear_domain;ASCL1_HUMAN;HLH;105;52`. When you pick a checkpoint, you are loading a model that never saw any reads from this domain during training (or saw only the augmentation reads specified by the chosen setting).
+
+### Loading a checkpoint and running a forward pass
+
+Each `model.pt` is a PyTorch `state_dict` for the `Model` class defined in [`model.py`](./model.py). To load a checkpoint and run a forward pass:
+
+```python
+import torch
+from model import Model
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Instantiate the same architecture used at training time
+model = Model(dropout_rate=0.5).to(device)
+
+# Load one of the pre-trained checkpoints
+checkpoint_path = ('TENet_Trained_Models/1_Zero_shot/'
+                   'Short_nuclear_domain;ASCL1_HUMAN;HLH;105;52/'
+                   'replicate_0/model.pt')
+model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+model.eval()
+
+# Build inputs for one or more sequences using create_data.py
+# (token_representations, dist_matrix, aa_descriptors_sequence).
+# Expected input shapes — B = batch size, L = sequence length:
+#   token_representations    : (B, L, 1280)  ESM-2 per-residue embeddings
+#   dist_matrix              : (B, L, L)     residue-residue distance matrix
+#   aa_descriptors_sequence  : (B, L, 66)    per-residue AA descriptors
+
+with torch.no_grad():
+    p_off = model(token_representations.to(device),
+                  dist_matrix.to(device),
+                  aa_descriptors_sequence.to(device))
+
+# p_off has shape (B, 1) — the predicted P(OFF) for each input sequence.
+```
+
+To produce the three input tensors for arbitrary new sequences, see [`create_data.py`](./create_data.py), which builds them from an amino-acid sequence plus an ESMFold-predicted PDB structure.
+
 ## Questions, problems?
 Make a github issue 😄. Please be as clear and descriptive as possible. Please feel free to reach
 out in person: (akshat98[AT]stanford[DOT]edu)
